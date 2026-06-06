@@ -10,7 +10,9 @@
             </el-input>
             <el-select v-model="statusFilter" placeholder="状态" clearable style="width: 140px; margin-left: 12px" @change="loadBooks">
               <el-option label="待审核" value="donated" />
-              <el-option label="已拒绝" value="rejected" />
+              <el-option label="已拒收" value="rejected" />
+              <el-option label="待清洁" value="pending_clean" />
+              <el-option label="转赠学校" value="transferred_school" />
               <el-option label="可借阅" value="available" />
               <el-option label="借阅中" value="borrowed" />
               <el-option label="破损" value="damaged" />
@@ -62,8 +64,10 @@
         </div>
 
         <div v-if="userStore.role === 'volunteer' && selectedBook.status === 'donated'" class="actions">
-          <el-button type="success" @click="openReview(true)">审核通过</el-button>
-          <el-button type="danger" @click="openReview(false)">审核拒绝</el-button>
+          <el-button type="success" @click="openReview('shelf')">✅ 上架</el-button>
+          <el-button type="warning" @click="openReview('clean')">🧹 待清洁</el-button>
+          <el-button type="primary" @click="openReview('transfer')">🏫 转赠学校</el-button>
+          <el-button type="danger" @click="openReview('reject')">❌ 拒收</el-button>
         </div>
 
         <div v-if="userStore.role === 'volunteer' && (selectedBook.status === 'borrowed' || selectedBook.status === 'damaged')" class="actions">
@@ -87,18 +91,78 @@
       </div>
     </el-dialog>
 
-    <el-dialog v-model="reviewVisible" title="图书审核" width="480px">
-      <el-form :model="reviewForm" label-width="80px">
-        <el-form-item label="品相">
+    <el-dialog v-model="reviewVisible" title="图书分级审核" width="560px" :close-on-click-modal="false">
+      <el-form :model="reviewForm" label-width="100px">
+        <el-divider content-position="left">评估信息</el-divider>
+        <el-form-item label="图书品相" required>
           <el-radio-group v-model="reviewForm.condition">
-            <el-radio value="good">完好</el-radio>
-            <el-radio value="fair">一般</el-radio>
-            <el-radio value="poor">破损</el-radio>
-            <el-radio value="missing_pages">缺页</el-radio>
+            <el-radio label="good">完好</el-radio>
+            <el-radio label="fair">一般</el-radio>
+            <el-radio label="poor">破损</el-radio>
           </el-radio-group>
         </el-form-item>
+        <el-form-item label="是否缺页" required>
+          <el-radio-group v-model="reviewForm.missing_pages">
+            <el-radio :label="false">完整无缺页</el-radio>
+            <el-radio :label="true">存在缺页</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="内容类型" required>
+          <el-select v-model="reviewForm.content_type" placeholder="请选择内容类型" style="width: 100%">
+            <el-option label="文学小说" value="文学小说" />
+            <el-option label="科技科普" value="科技科普" />
+            <el-option label="历史传记" value="历史传记" />
+            <el-option label="儿童读物" value="儿童读物" />
+            <el-option label="社会科学" value="社会科学" />
+            <el-option label="艺术设计" value="艺术设计" />
+            <el-option label="生活健康" value="生活健康" />
+            <el-option label="教辅教材" value="教辅教材" />
+            <el-option label="其他" value="其他" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="适读年龄" required>
+          <el-select v-model="reviewForm.age_range" placeholder="请选择适读年龄" style="width: 100%">
+            <el-option label="幼儿（0-6岁）" value="幼儿（0-6岁）" />
+            <el-option label="儿童（7-12岁）" value="儿童（7-12岁）" />
+            <el-option label="青少年（13-18岁）" value="青少年（13-18岁）" />
+            <el-option label="成人（18岁以上）" value="成人（18岁以上）" />
+            <el-option label="全年龄段" value="全年龄段" />
+          </el-select>
+        </el-form-item>
+        <el-divider content-position="left">审核决定</el-divider>
+        <el-form-item label="审核决定" required>
+          <el-radio-group v-model="reviewForm.decision">
+            <el-radio-button label="shelf">✅ 上架</el-radio-button>
+            <el-radio-button label="clean">🧹 待清洁</el-radio-button>
+            <el-radio-button label="transfer">🏫 转赠学校</el-radio-button>
+            <el-radio-button label="reject">❌ 拒收</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="图书分类" v-if="reviewForm.decision === 'shelf'" required>
+          <el-select v-model="reviewForm.category" placeholder="请选择分类" style="width: 100%">
+            <el-option label="文学小说" value="文学小说" />
+            <el-option label="科技科普" value="科技科普" />
+            <el-option label="历史传记" value="历史传记" />
+            <el-option label="儿童读物" value="儿童读物" />
+            <el-option label="社会科学" value="社会科学" />
+            <el-option label="艺术设计" value="艺术设计" />
+            <el-option label="生活健康" value="生活健康" />
+            <el-option label="教辅教材" value="教辅教材" />
+            <el-option label="其他" value="其他" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="拒收原因" v-if="reviewForm.decision === 'reject'" required>
+          <el-select v-model="reviewForm.reject_reason" placeholder="请选择或填写拒收原因" style="width: 100%" allow-create filterable>
+            <el-option label="图书严重破损，无法修复" value="图书严重破损，无法修复" />
+            <el-option label="严重缺页，影响阅读" value="严重缺页，影响阅读" />
+            <el-option label="内容不适宜（非法/违规/低俗）" value="内容不适宜（非法/违规/低俗）" />
+            <el-option label="教材/教辅版本过旧，已不适用" value="教材/教辅版本过旧，已不适用" />
+            <el-option label="印刷质量差或为盗版" value="印刷质量差或为盗版" />
+            <el-option label="其他原因" value="其他原因" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="审核意见">
-          <el-input v-model="reviewForm.comment" type="textarea" :rows="3" placeholder="请输入审核意见" />
+          <el-input v-model="reviewForm.comment" type="textarea" :rows="2" placeholder="请输入审核意见" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -149,20 +213,19 @@ const activities = ref([])
 const borrowLoading = ref(false)
 
 const reviewVisible = ref(false)
-const reviewApproved = ref(true)
 const reviewLoading = ref(false)
-const reviewForm = reactive({ condition: 'good', comment: '' })
+const reviewForm = reactive({ decision: 'shelf', condition: 'good', content_type: '', age_range: '', missing_pages: false, category: '', reject_reason: '', comment: '' })
 
 const returnVisible = ref(false)
 const returnLoading = ref(false)
 const returnForm = reactive({ condition: 'good', return_photo: '' })
 
 const statusLabel = (s) => {
-  const map = { donated: '待审核', rejected: '已拒绝', available: '可借阅', borrowed: '借阅中', damaged: '破损', repairing: '维修中', off_shelf: '已下架' }
+  const map = { donated: '待审核', rejected: '已拒收', available: '可借阅', borrowed: '借阅中', damaged: '破损', repairing: '维修中', off_shelf: '已下架', pending_clean: '待清洁', transferred_school: '转赠学校' }
   return map[s] || s
 }
 const statusType = (s) => {
-  const map = { donated: 'warning', rejected: 'danger', available: 'success', borrowed: 'primary', damaged: 'danger', repairing: 'warning', off_shelf: 'info' }
+  const map = { donated: 'warning', rejected: 'danger', available: 'success', borrowed: 'primary', damaged: 'danger', repairing: 'warning', off_shelf: 'info', pending_clean: 'warning', transferred_school: 'primary' }
   return map[s] || 'info'
 }
 const timelineType = (s) => {
@@ -205,22 +268,35 @@ const handleBorrow = async () => {
   }
 }
 
-const openReview = (approved) => {
-  reviewApproved.value = approved
-  reviewForm.comment = approved ? '图书品相合格，审核通过' : '图书不符合上架标准'
-  reviewForm.condition = approved ? 'good' : 'poor'
+const openReview = (decision) => {
+  reviewForm.decision = decision || 'shelf'
+  reviewForm.condition = decision === 'reject' ? 'poor' : 'good'
+  reviewForm.content_type = ''
+  reviewForm.age_range = ''
+  reviewForm.missing_pages = decision === 'reject'
+  reviewForm.category = ''
+  reviewForm.reject_reason = decision === 'reject' ? '图书不符合上架标准' : ''
+  reviewForm.comment = ''
   reviewVisible.value = true
 }
 
 const handleReview = async () => {
+  if (!reviewForm.condition || !reviewForm.content_type || !reviewForm.age_range || !reviewForm.decision) {
+    ElMessage.warning('请完整填写评估信息和审核决定')
+    return
+  }
+  if (reviewForm.decision === 'shelf' && !reviewForm.category) {
+    ElMessage.warning('决定上架时请选择图书分类')
+    return
+  }
+  if (reviewForm.decision === 'reject' && !reviewForm.reject_reason) {
+    ElMessage.warning('拒收图书必须说明拒收原因')
+    return
+  }
   try {
     reviewLoading.value = true
-    await reviewBook(selectedBook.value.id, {
-      approved: reviewApproved.value,
-      comment: reviewForm.comment,
-      condition: reviewForm.condition
-    })
-    ElMessage.success(`审核${reviewApproved.value ? '通过' : '已拒绝'}`)
+    await reviewBook(selectedBook.value.id, { ...reviewForm })
+    ElMessage.success('审核提交成功')
     reviewVisible.value = false
     detailVisible.value = false
     loadBooks()

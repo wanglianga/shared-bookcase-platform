@@ -94,7 +94,7 @@ const getDb = async () => {
         category TEXT,
         description TEXT,
         cover_url TEXT,
-        status TEXT NOT NULL DEFAULT 'donated' CHECK(status IN ('donated', 'pending_review', 'rejected', 'available', 'borrowed', 'damaged', 'repairing', 'off_shelf')),
+        status TEXT NOT NULL DEFAULT 'donated' CHECK(status IN ('donated', 'pending_review', 'rejected', 'available', 'borrowed', 'damaged', 'repairing', 'off_shelf', 'pending_clean', 'transferred_school')),
         donor_id INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (donor_id) REFERENCES users(id)
@@ -117,9 +117,14 @@ const getDb = async () => {
         book_id INTEGER NOT NULL,
         donor_id INTEGER NOT NULL,
         reviewer_id INTEGER,
-        review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending', 'approved', 'rejected')),
+        review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending', 'approved', 'rejected', 'pending_clean', 'transferred_school')),
         review_comment TEXT,
+        reject_reason TEXT,
         condition TEXT CHECK(condition IN ('good', 'fair', 'poor', 'missing_pages')),
+        content_type TEXT,
+        age_range TEXT,
+        missing_pages INTEGER DEFAULT 0,
+        review_decision TEXT CHECK(review_decision IN ('shelf', 'clean', 'transfer', 'reject')),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (book_id) REFERENCES books(id),
         FOREIGN KEY (donor_id) REFERENCES users(id),
@@ -156,7 +161,7 @@ const getDb = async () => {
 
       CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        type TEXT NOT NULL CHECK(type IN ('review', 'shelf', 'inventory', 'clean', 'repair')),
+        type TEXT NOT NULL CHECK(type IN ('review', 'shelf', 'inventory', 'clean', 'repair', 'transfer_school')),
         assignee_id INTEGER,
         book_id INTEGER,
         bookcase_id INTEGER,
@@ -181,6 +186,18 @@ const getDb = async () => {
         FOREIGN KEY (operator_id) REFERENCES users(id)
       );
     `);
+
+    const addColumnIfNotExists = (table, column, definition) => {
+      try {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      } catch (e) {
+      }
+    };
+    addColumnIfNotExists('donations', 'reject_reason', 'TEXT');
+    addColumnIfNotExists('donations', 'content_type', 'TEXT');
+    addColumnIfNotExists('donations', 'age_range', 'TEXT');
+    addColumnIfNotExists('donations', 'missing_pages', 'INTEGER DEFAULT 0');
+    addColumnIfNotExists('donations', 'review_decision', 'TEXT');
 
     return wrappedDb;
   })();

@@ -127,12 +127,15 @@ router.post('/:id/complete', authMiddleware, async (req, res) => {
   const result = {};
 
   if (task.type === 'review' && task.book_id) {
-    const { approved, comment, condition, category, bookcase_id } = req.body;
-    if (approved === undefined) {
-      return res.status(400).json({ error: '请选择审核结果（通过/拒绝）' });
+    const { decision, comment, condition, content_type, age_range, missing_pages, reject_reason, category, bookcase_id } = req.body;
+    if (!decision || !['shelf', 'clean', 'transfer', 'reject'].includes(decision)) {
+      return res.status(400).json({ error: '请选择有效的审核决定：上架、待清洁、转赠学校或拒收' });
     }
-    if (approved && !category) {
-      return res.status(400).json({ error: '审核通过时请选择图书分类' });
+    if (decision === 'reject' && !reject_reason) {
+      return res.status(400).json({ error: '拒收图书必须说明拒收原因' });
+    }
+    if (decision === 'shelf' && !category) {
+      return res.status(400).json({ error: '决定上架时请选择图书分类' });
     }
 
     const book = db.prepare('SELECT * FROM books WHERE id = ?').get(task.book_id);
@@ -141,16 +144,38 @@ router.post('/:id/complete', authMiddleware, async (req, res) => {
     }
 
     const oldStatus = book.status;
-    const reviewStatus = approved ? 'approved' : 'rejected';
-    const bookStatus = approved ? 'available' : 'rejected';
+
+    let bookStatus, reviewStatus, decisionText;
+    switch (decision) {
+      case 'shelf':
+        bookStatus = 'available';
+        reviewStatus = 'approved';
+        decisionText = '审核通过，上架可借阅';
+        break;
+      case 'clean':
+        bookStatus = 'pending_clean';
+        reviewStatus = 'pending_clean';
+        decisionText = '审核通过，待清洁后上架';
+        break;
+      case 'transfer':
+        bookStatus = 'transferred_school';
+        reviewStatus = 'transferred_school';
+        decisionText = '审核通过，转赠学校';
+        break;
+      case 'reject':
+        bookStatus = 'rejected';
+        reviewStatus = 'rejected';
+        decisionText = `审核拒收：${reject_reason}`;
+        break;
+    }
 
     const donation = db.prepare('SELECT * FROM donations WHERE book_id = ? ORDER BY created_at DESC LIMIT 1').get(task.book_id);
     if (donation) {
-      db.prepare('UPDATE donations SET reviewer_id = ?, review_status = ?, review_comment = ?, condition = ? WHERE id = ?')
-        .run(req.user.id, reviewStatus, comment || null, condition || null, donation.id);
+      db.prepare(`UPDATE donations SET reviewer_id = ?, review_status = ?, review_comment = ?, reject_reason = ?, condition = ?, content_type = ?, age_range = ?, missing_pages = ?, review_decision = ? WHERE id = ?`)
+        .run(req.user.id, reviewStatus, comment || null, reject_reason || null, condition || null, content_type || null, age_range || null, missing_pages ? 1 : 0, decision, donation.id);
     } else {
-      db.prepare('INSERT INTO donations (book_id, donor_id, reviewer_id, review_status, review_comment, condition) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(task.book_id, book.donor_id, req.user.id, reviewStatus, comment || null, condition || null);
+      db.prepare(`INSERT INTO donations (book_id, donor_id, reviewer_id, review_status, review_comment, reject_reason, condition, content_type, age_range, missing_pages, review_decision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(task.book_id, book.donor_id, req.user.id, reviewStatus, comment || null, reject_reason || null, condition || null, content_type || null, age_range || null, missing_pages ? 1 : 0, decision);
     }
 
     const updateBookFields = ['status = ?'];
@@ -162,9 +187,9 @@ router.post('/:id/complete', authMiddleware, async (req, res) => {
     updateBookParams.push(task.book_id);
     db.prepare(`UPDATE books SET ${updateBookFields.join(', ')} WHERE id = ?`).run(...updateBookParams);
 
-    addActivity(db, book.id, oldStatus, bookStatus, req.user.id, comment || `审核${approved ? '通过' : '拒绝'}（品相：${condition || '未填写'}）`);
+    addActivity(db, book.id, oldStatus, bookStatus, req.user.id, comment || decisionText);
 
-    if (approved && bookcase_id) {
+    if (decision === 'shelf' && bookcase_id) {
       const shelfTaskDesc = `将《${book.title}》上架到指定书柜`;
       const existingShelf = db.prepare("SELECT id FROM tasks WHERE book_id = ? AND type = 'shelf' AND status != 'completed'").get(task.book_id);
       if (!existingShelf) {
@@ -174,8 +199,26 @@ router.post('/:id/complete', authMiddleware, async (req, res) => {
       addActivity(db, book.id, bookStatus, bookStatus, req.user.id, `上架到书柜 #${bookcase_id}`);
     }
 
+    if (decision === 'clean') {
+      const cleanTaskDesc = `清洁《${book.title}》后上架`;
+      const existingClean = db.prepare("SELECT id FROM tasks WHERE book_id = ? AND type = 'clean' AND status != 'completed'").get(task.book_id);
+      if (!existingClean) {
+        db.prepare("INSERT INTO tasks (type, book_id, status, description) VALUES ('clean', ?, 'pending', ?)")
+          .run(book.id, cleanTaskDesc);
+      }
+    }
+
+    if (decision === 'transfer') {
+      const transferTaskDesc = `将《${book.title}》转赠学校`;
+      const existingTransfer = db.prepare("SELECT id FROM tasks WHERE book_id = ? AND type = 'transfer_school' AND status != 'completed'").get(task.book_id);
+      if (!existingTransfer) {
+        db.prepare("INSERT INTO tasks (type, book_id, status, description) VALUES ('transfer_school', ?, 'pending', ?)")
+          .run(book.id, transferTaskDesc);
+      }
+    }
+
     result.book = db.prepare('SELECT * FROM books WHERE id = ?').get(task.book_id);
-    result.approved = approved;
+    result.decision = decision;
   }
 
   if (task.type === 'repair' && task.book_id) {
