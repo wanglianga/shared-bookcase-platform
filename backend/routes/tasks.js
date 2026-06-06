@@ -111,15 +111,96 @@ router.post('/:id/claim', authMiddleware, async (req, res) => {
   res.json(updated);
 });
 
+const addActivity = (db, bookId, fromStatus, toStatus, operatorId, remark) => {
+  db.prepare(
+    'INSERT INTO activities (book_id, from_status, to_status, operator_id, remark) VALUES (?, ?, ?, ?, ?)'
+  ).run(bookId, fromStatus, toStatus, operatorId, remark || null);
+};
+
 router.post('/:id/complete', authMiddleware, async (req, res) => {
   const db = await getDb();
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) {
     return res.status(404).json({ error: '任务不存在' });
   }
+
+  const result = {};
+
+  if (task.type === 'review' && task.book_id) {
+    const { approved, comment, condition, category, bookcase_id } = req.body;
+    if (approved === undefined) {
+      return res.status(400).json({ error: '请选择审核结果（通过/拒绝）' });
+    }
+    if (approved && !category) {
+      return res.status(400).json({ error: '审核通过时请选择图书分类' });
+    }
+
+    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(task.book_id);
+    if (!book) {
+      return res.status(400).json({ error: '关联图书不存在' });
+    }
+
+    const oldStatus = book.status;
+    const reviewStatus = approved ? 'approved' : 'rejected';
+    const bookStatus = approved ? 'available' : 'rejected';
+
+    const donation = db.prepare('SELECT * FROM donations WHERE book_id = ? ORDER BY created_at DESC LIMIT 1').get(task.book_id);
+    if (donation) {
+      db.prepare('UPDATE donations SET reviewer_id = ?, review_status = ?, review_comment = ?, condition = ? WHERE id = ?')
+        .run(req.user.id, reviewStatus, comment || null, condition || null, donation.id);
+    } else {
+      db.prepare('INSERT INTO donations (book_id, donor_id, reviewer_id, review_status, review_comment, condition) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(task.book_id, book.donor_id, req.user.id, reviewStatus, comment || null, condition || null);
+    }
+
+    const updateBookFields = ['status = ?'];
+    const updateBookParams = [bookStatus];
+    if (category) {
+      updateBookFields.push('category = ?');
+      updateBookParams.push(category);
+    }
+    updateBookParams.push(task.book_id);
+    db.prepare(`UPDATE books SET ${updateBookFields.join(', ')} WHERE id = ?`).run(...updateBookParams);
+
+    addActivity(db, book.id, oldStatus, bookStatus, req.user.id, comment || `审核${approved ? '通过' : '拒绝'}（品相：${condition || '未填写'}）`);
+
+    if (approved && bookcase_id) {
+      const shelfTaskDesc = `将《${book.title}》上架到指定书柜`;
+      const existingShelf = db.prepare("SELECT id FROM tasks WHERE book_id = ? AND type = 'shelf' AND status != 'completed'").get(task.book_id);
+      if (!existingShelf) {
+        db.prepare("INSERT INTO tasks (type, assignee_id, book_id, bookcase_id, status, description) VALUES ('shelf', ?, ?, ?, 'completed', ?)")
+          .run(req.user.id, task.book_id, bookcase_id, shelfTaskDesc);
+      }
+      addActivity(db, book.id, bookStatus, bookStatus, req.user.id, `上架到书柜 #${bookcase_id}`);
+    }
+
+    result.book = db.prepare('SELECT * FROM books WHERE id = ?').get(task.book_id);
+    result.approved = approved;
+  }
+
+  if (task.type === 'repair' && task.book_id) {
+    const { repair_cost, paid_by, status } = req.body;
+    const existingRepair = db.prepare('SELECT * FROM repairs WHERE book_id = ? ORDER BY created_at DESC LIMIT 1').get(task.book_id);
+    if (existingRepair) {
+      db.prepare('UPDATE repairs SET handler_id = ?, repair_cost = COALESCE(?, repair_cost), paid_by = COALESCE(?, paid_by), status = ? WHERE id = ?')
+        .run(req.user.id, repair_cost || null, paid_by || null, status || 'completed', existingRepair.id);
+    } else {
+      db.prepare('INSERT INTO repairs (book_id, handler_id, repair_cost, paid_by, status) VALUES (?, ?, ?, ?, ?)')
+        .run(task.book_id, req.user.id, repair_cost || 0, paid_by || 'community', status || 'completed');
+    }
+
+    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(task.book_id);
+    if (book) {
+      const oldStatus = book.status;
+      const newStatus = status === 'written_off' ? 'off_shelf' : 'available';
+      db.prepare('UPDATE books SET status = ? WHERE id = ?').run(newStatus, task.book_id);
+      addActivity(db, task.book_id, oldStatus, newStatus, req.user.id, `维修${status === 'written_off' ? '已注销' : '已完成'}`);
+    }
+  }
+
   db.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(req.params.id);
   const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
-  res.json(updated);
+  res.json({ ...updated, ...result });
 });
 
 router.delete('/:id', authMiddleware, async (req, res) => {

@@ -24,8 +24,8 @@ export const claimTask = (id) => {
   return request.post(`/tasks/${id}/claim`)
 }
 
-export const completeTask = (id) => {
-  return request.post(`/tasks/${id}/complete`)
+export const completeTask = (id, data) => {
+  return request.post(`/tasks/${id}/complete`, data || {})
 }
 
 export const deleteTask = (id) => {
